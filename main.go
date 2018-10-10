@@ -16,6 +16,7 @@ import (
 	"github.com/brutella/hc"
 	"github.com/brutella/hc/accessory"
 	"github.com/brutella/hc/characteristic"
+	hclog "github.com/brutella/hc/log"
 	"github.com/brutella/hc/service"
 )
 
@@ -55,6 +56,10 @@ func main() {
 		url = fmt.Sprintf("http://%s:8888/zigbee/se/instantaneousdemand", ip)
 	default:
 		log.Fatal("Support versions: 1, 2")
+	}
+
+	if x := os.Getenv("HC_DEBUG"); x != "" {
+		hclog.Debug.Enable()
 	}
 
 	cfg := hc.Config{
