@@ -152,6 +152,10 @@ func promExporter(ctx context.Context, url string) {
 	}()
 
 	if err := s.ListenAndServe(); err != nil {
+		if err == http.ErrServerClosed {
+			return
+		}
+
 		log.Fatalf("cannot start Prometheus exporter: %v", err)
 	}
 }
