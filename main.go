@@ -18,6 +18,9 @@ import (
 	"github.com/brutella/hc/characteristic"
 	hclog "github.com/brutella/hc/log"
 	"github.com/brutella/hc/service"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const (
@@ -95,53 +98,90 @@ func main() {
 		<-t.Stop()
 	})
 
-	go update(ctx, c, time.Duration(interval)*time.Second, url)
+	gauge := promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "powerley_energybridge_instantaneous_demand",
+		Help: "Current power demand in watts.",
+	})
+
+	go update(ctx, c, gauge, time.Duration(interval)*time.Second, url)
+	go promExporter(ctx, url)
 
 	log.Println("Starting transport...")
 	t.Start()
 }
 
-func update(ctx context.Context, c *characteristic.Int, interval time.Duration, url string) {
+func update(ctx context.Context, c *characteristic.Int, gauge prometheus.Gauge, interval time.Duration, url string) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 
 	for {
 		select {
 		case <-t.C:
-			resp, err := http.Get(url)
+			p, err := getPower(url)
 			if err != nil {
-				log.Printf("Error fetching energy usage: %v", err)
-				continue
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				log.Printf("Invalid status code: %d", resp.StatusCode)
+				log.Printf("Unable to get power reading: %v", err)
 				continue
 			}
 
-			data, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				log.Printf("Error reading energy usage: %v", err)
-				continue
-			}
-
-			parts := strings.Split(string(data), " ")
-			if len(parts) != 2 || parts[1] != "kW" {
-				log.Printf("Unexpected energy usage output: %q", data)
-				continue
-			}
-
-			kw, err := strconv.ParseFloat(parts[0], 64)
-			if err != nil {
-				log.Printf("Unable to parse energy usage: %q", data)
-				continue
-			}
-
-			c.SetValue(int(kw * 1000))
+			c.SetValue(p)
+			gauge.Set(float64(p))
 
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+func promExporter(ctx context.Context, url string) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/metrics", http.StatusMovedPermanently)
+	})
+	mux.Handle("/metrics", promhttp.Handler())
+
+	log.Printf("Starting Prometheus exporter on :9525")
+
+	s := http.Server{
+		Addr:    ":9525",
+		Handler: mux,
+	}
+
+	go func() {
+		<-ctx.Done()
+		s.Shutdown(context.Background())
+	}()
+
+	if err := s.ListenAndServe(); err != nil {
+		log.Fatalf("cannot start Prometheus exporter: %v", err)
+	}
+}
+
+func getPower(url string) (int, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("Invalid status code: %d", resp.StatusCode)
+	}
+
+	data, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+
+	parts := strings.Split(string(data), " ")
+	if len(parts) != 2 || parts[1] != "kW" {
+		return 0, fmt.Errorf("Unexpected energy usage output: %q", data)
+	}
+
+	kw, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return 0, err
+	}
+
+	return int(kw * 1000), nil
+
 }
