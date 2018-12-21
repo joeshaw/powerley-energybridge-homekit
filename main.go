@@ -40,11 +40,13 @@ func main() {
 		ip       string
 		version  int
 		interval int
+		addr     string
 	)
 
 	flag.StringVar(&ip, "ip", "", "IP address of energy bridge")
 	flag.IntVar(&version, "version", 2, "Energy bridge version")
 	flag.IntVar(&interval, "interval", 5, "Interval to update from energy bridge, in seconds")
+	flag.StringVar(&addr, "addr", ":9525", "Address to listen on for Prometheus exporter")
 	flag.Parse()
 
 	if ip == "" {
@@ -104,7 +106,7 @@ func main() {
 	})
 
 	go update(ctx, c, gauge, time.Duration(interval)*time.Second, url)
-	go promExporter(ctx, url)
+	go promExporter(ctx, addr, url)
 
 	log.Println("Starting transport...")
 	t.Start()
@@ -123,8 +125,8 @@ func update(ctx context.Context, c *characteristic.Int, gauge prometheus.Gauge, 
 				continue
 			}
 
-			c.SetValue(p)
-			gauge.Set(float64(p))
+			c.SetValue(int(p))
+			gauge.Set(p)
 
 		case <-ctx.Done():
 			return
@@ -132,17 +134,17 @@ func update(ctx context.Context, c *characteristic.Int, gauge prometheus.Gauge, 
 	}
 }
 
-func promExporter(ctx context.Context, url string) {
+func promExporter(ctx context.Context, addr, url string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/metrics", http.StatusMovedPermanently)
 	})
 	mux.Handle("/metrics", promhttp.Handler())
 
-	log.Printf("Starting Prometheus exporter on :9525")
+	log.Printf("Starting Prometheus exporter on %s", addr)
 
 	s := http.Server{
-		Addr:    ":9525",
+		Addr:    addr,
 		Handler: mux,
 	}
 
@@ -160,7 +162,7 @@ func promExporter(ctx context.Context, url string) {
 	}
 }
 
-func getPower(url string) (int, error) {
+func getPower(url string) (float64, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return 0, err
@@ -181,11 +183,12 @@ func getPower(url string) (int, error) {
 		return 0, fmt.Errorf("Unexpected energy usage output: %q", data)
 	}
 
-	kw, err := strconv.ParseFloat(parts[0], 64)
+	// The units are a lie.  Despite saying output is in
+	// kilowatts, they're really in watts.
+	watts, err := strconv.ParseFloat(parts[0], 64)
 	if err != nil {
 		return 0, err
 	}
 
-	return int(kw * 1000), nil
-
+	return watts, nil
 }
