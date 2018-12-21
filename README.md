@@ -17,7 +17,7 @@ rather than a "sensor".)
 
 A Prometheus exporter is run (on port 9525 by default) which exports
 the current demand in watts under the metric
-`powerley_energybridge_instantaneous_demand`.
+`powerley_energybridge_instantaneous_demand_watts`.
 
 ## Installing
 
