@@ -101,7 +101,7 @@ func main() {
 	})
 
 	gauge := promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "powerley_energybridge_instantaneous_demand",
+		Name: "powerley_energybridge_instantaneous_demand_watts",
 		Help: "Current power demand in watts.",
 	})
 
