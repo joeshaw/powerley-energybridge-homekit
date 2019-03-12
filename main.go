@@ -2,15 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/brutella/hc"
@@ -18,6 +16,7 @@ import (
 	"github.com/brutella/hc/characteristic"
 	hclog "github.com/brutella/hc/log"
 	"github.com/brutella/hc/service"
+	"github.com/eclipse/paho.mqtt.golang"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -36,16 +35,9 @@ const (
 )
 
 func main() {
-	var (
-		ip       string
-		version  int
-		interval int
-		addr     string
-	)
+	var ip, addr string
 
 	flag.StringVar(&ip, "ip", "", "IP address of energy bridge")
-	flag.IntVar(&version, "version", 2, "Energy bridge version")
-	flag.IntVar(&interval, "interval", 5, "Interval to update from energy bridge, in seconds")
 	flag.StringVar(&addr, "addr", ":9525", "Address to listen on for Prometheus exporter")
 	flag.Parse()
 
@@ -53,14 +45,15 @@ func main() {
 		log.Fatal("-ip must be provided")
 	}
 
-	var url string
-	switch version {
-	case 1:
-		url = fmt.Sprintf("http://%s/instantaneousdemand", ip)
-	case 2:
-		url = fmt.Sprintf("http://%s:8888/zigbee/se/instantaneousdemand", ip)
-	default:
-		log.Fatal("Support versions: 1, 2")
+	opts := mqtt.NewClientOptions()
+	opts.AddBroker("tcp://" + ip + ":2883")
+	opts.SetUsername("admin")
+	opts.SetPassword("trinity")
+	opts.SetClientID("powerley-energybridge-homecontrol")
+
+	c := mqtt.NewClient(opts)
+	if token := c.Connect(); token.Wait() && token.Error() != nil {
+		log.Fatalf("unable to connect to %s: %v", ip, token.Error())
 	}
 
 	if x := os.Getenv("HC_DEBUG"); x != "" {
@@ -79,12 +72,12 @@ func main() {
 
 	acc := accessory.New(info, accessory.TypeSensor)
 	svc := service.New(typePowerMonitor)
-	c := characteristic.NewInt(consumptionUUID)
-	c.Format = characteristic.FormatUInt16
-	c.Perms = characteristic.PermsRead()
-	c.Unit = "W"
+	char := characteristic.NewInt(consumptionUUID)
+	char.Format = characteristic.FormatUInt16
+	char.Perms = characteristic.PermsRead()
+	char.Unit = "W"
 
-	svc.AddCharacteristic(c.Characteristic)
+	svc.AddCharacteristic(char.Characteristic)
 	acc.AddService(svc)
 
 	t, err := hc.NewIPTransport(cfg, acc)
@@ -97,6 +90,7 @@ func main() {
 
 	hc.OnTermination(func() {
 		cancel()
+		c.Disconnect(250)
 		<-t.Stop()
 	})
 
@@ -105,36 +99,81 @@ func main() {
 		Help: "Current power demand in watts.",
 	})
 
-	go update(ctx, c, gauge, time.Duration(interval)*time.Second, url)
-	go promExporter(ctx, addr, url)
+	token := c.Subscribe("#", 0, func(c mqtt.Client, m mqtt.Message) {
+		if x := os.Getenv("HC_DEBUG"); x != "" {
+			fmt.Println(m.Topic(), string(m.Payload()))
+		}
+
+		switch m.Topic() {
+		case "announce":
+			var j struct {
+				EBOSVersion string `json:"eb_os_version"`
+				Serial      string `json:"serial"`
+			}
+			if err := json.Unmarshal(m.Payload(), &j); err != nil {
+				log.Printf("unable to unmarshal message payload: %v", err)
+				return
+			}
+
+			acc.Info.FirmwareRevision.SetValue(j.EBOSVersion)
+			acc.Info.SerialNumber.SetValue(j.Serial)
+
+		case "_zigbee_metering/event/metering/instantaneous_demand":
+			var j struct {
+				Demand int `json:"demand"`
+			}
+			if err := json.Unmarshal(m.Payload(), &j); err != nil {
+				log.Printf("unable to unmarshal message payload: %v", err)
+				return
+			}
+
+			char.SetValue(j.Demand)
+			gauge.Set(float64(j.Demand))
+		}
+	})
+	token.Wait()
+	if err := token.Error(); err != nil {
+		log.Fatalf("unable to subscribe to MQTT messages: %v", err)
+	}
+
+	go loopRefresh(ctx, c)
+	go promExporter(ctx, addr)
 
 	log.Println("Starting transport...")
 	t.Start()
 }
 
-func update(ctx context.Context, c *characteristic.Int, gauge prometheus.Gauge, interval time.Duration, url string) {
-	t := time.NewTicker(interval)
+func loopRefresh(ctx context.Context, c mqtt.Client) {
+	if err := refresh(c); err != nil {
+		log.Printf("Unable to refresh subscription: %v", err)
+	}
+
+	// Instantaneous readings expire after 5 minutes, so
+	// refresh every 3.
+	t := time.NewTicker(180 * time.Second)
 	defer t.Stop()
 
 	for {
 		select {
-		case <-t.C:
-			p, err := getPower(url)
-			if err != nil {
-				log.Printf("Unable to get power reading: %v", err)
-				continue
-			}
-
-			c.SetValue(int(p))
-			gauge.Set(p)
-
 		case <-ctx.Done():
 			return
+
+		case <-t.C:
+			if err := refresh(c); err != nil {
+				log.Printf("Unable to refresh subscription: %v", err)
+			}
 		}
 	}
 }
 
-func promExporter(ctx context.Context, addr, url string) {
+func refresh(c mqtt.Client) error {
+	payload := fmt.Sprintf(`{"request_id":"%x"}`, time.Now().UnixNano())
+	token := c.Publish("_zigbee_metering/request/is_app_open", 0, false, []byte(payload))
+	token.Wait()
+	return token.Error()
+}
+
+func promExporter(ctx context.Context, addr string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/metrics", http.StatusMovedPermanently)
@@ -160,35 +199,4 @@ func promExporter(ctx context.Context, addr, url string) {
 
 		log.Fatalf("cannot start Prometheus exporter: %v", err)
 	}
-}
-
-func getPower(url string) (float64, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("Invalid status code: %d", resp.StatusCode)
-	}
-
-	data, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return 0, err
-	}
-
-	parts := strings.Split(string(data), " ")
-	if len(parts) != 2 || parts[1] != "kW" {
-		return 0, fmt.Errorf("Unexpected energy usage output: %q", data)
-	}
-
-	// The units are a lie.  Despite saying output is in
-	// kilowatts, they're really in watts.
-	watts, err := strconv.ParseFloat(parts[0], 64)
-	if err != nil {
-		return 0, err
-	}
-
-	return watts, nil
 }

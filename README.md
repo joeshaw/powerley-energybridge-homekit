@@ -29,8 +29,8 @@ Then you can run the service:
 
     powerley-energybridge-homecontrol -ip <energybridge ip>
 
-The service will query the energy bridge every 5 seconds.  This can be
-overridden with the `-interval` flag.
+The service will receive messages from the energy bridge every 5
+seconds.
 
 The Prometheus exporter runs on port 9525 by default.  This can be
 changed with the `-addr` flag.
@@ -47,7 +47,7 @@ sure the code has been run through `gofmt`.
 
 ## License
 
-Copyright 2018 Joe Shaw
+Copyright 2018-2019 Joe Shaw
 
 `powerley-energybridge-homecontrol` is licensed under the MIT License.
 See the LICENSE file for details.
