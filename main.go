@@ -118,7 +118,7 @@ func main() {
 			acc.Info.FirmwareRevision.SetValue(j.EBOSVersion)
 			acc.Info.SerialNumber.SetValue(j.Serial)
 
-		case "_zigbee_metering/event/metering/instantaneous_demand":
+		case "_zigbee_metering/event/metering/instantaneous_demand", "event/metering/instantaneous_demand":
 			var j struct {
 				Demand int `json:"demand"`
 			}
@@ -168,9 +168,16 @@ func loopRefresh(ctx context.Context, c mqtt.Client) {
 
 func refresh(c mqtt.Client) error {
 	payload := fmt.Sprintf(`{"request_id":"%x"}`, time.Now().UnixNano())
-	token := c.Publish("_zigbee_metering/request/is_app_open", 0, false, []byte(payload))
-	token.Wait()
-	return token.Error()
+	token1 := c.Publish("_zigbee_metering/request/is_app_open", 0, false, []byte(payload))
+	token2 := c.Publish("remote/request/is_app_open", 0, false, []byte(payload))
+	token1.Wait()
+	token2.Wait()
+
+	if err := token1.Error(); err != nil {
+		return err
+	}
+
+	return token2.Error()
 }
 
 func promExporter(ctx context.Context, addr string) {
