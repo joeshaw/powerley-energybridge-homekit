@@ -16,7 +16,7 @@ import (
 	"github.com/brutella/hc/characteristic"
 	hclog "github.com/brutella/hc/log"
 	"github.com/brutella/hc/service"
-	"github.com/eclipse/paho.mqtt.golang"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -36,9 +36,11 @@ const (
 
 func main() {
 	var ip, addr string
+	var auth bool
 
 	flag.StringVar(&ip, "ip", "", "IP address of energy bridge")
 	flag.StringVar(&addr, "addr", ":9525", "Address to listen on for Prometheus exporter")
+	flag.BoolVar(&auth, "auth", false, "Send authentication information (needed for older firmwares)")
 	flag.Parse()
 
 	if ip == "" {
@@ -47,9 +49,11 @@ func main() {
 
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker("tcp://" + ip + ":2883")
-	opts.SetUsername("admin")
-	opts.SetPassword("trinity")
 	opts.SetClientID("powerley-energybridge-homecontrol")
+	if auth {
+		opts.SetUsername("admin")
+		opts.SetPassword("trinity")
+	}
 
 	c := mqtt.NewClient(opts)
 	if token := c.Connect(); token.Wait() && token.Error() != nil {
