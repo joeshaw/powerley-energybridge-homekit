@@ -103,7 +103,7 @@ func main() {
 		Help: "Current power demand in watts.",
 	})
 
-	token := c.Subscribe("#", 0, func(c mqtt.Client, m mqtt.Message) {
+	handler := func(c mqtt.Client, m mqtt.Message) {
 		if x := os.Getenv("HC_DEBUG"); x != "" {
 			fmt.Println(m.Topic(), string(m.Payload()))
 		}
@@ -134,27 +134,23 @@ func main() {
 			char.SetValue(j.Demand)
 			gauge.Set(float64(j.Demand))
 		}
-	})
-	token.Wait()
-	if err := token.Error(); err != nil {
-		log.Fatalf("unable to subscribe to MQTT messages: %v", err)
 	}
 
-	go loopRefresh(ctx, c)
+	go loopRefresh(ctx, c, handler)
 	go promExporter(ctx, addr)
 
 	log.Println("Starting transport...")
 	t.Start()
 }
 
-func loopRefresh(ctx context.Context, c mqtt.Client) {
-	if err := refresh(c); err != nil {
+func loopRefresh(ctx context.Context, c mqtt.Client, handler mqtt.MessageHandler) {
+	if err := refresh(c, handler); err != nil {
 		log.Printf("Unable to refresh subscription: %v", err)
 	}
 
-	// Instantaneous readings expire after 5 minutes, so
-	// refresh every 3.
-	t := time.NewTicker(180 * time.Second)
+	// Instantaneous readings expire after 30 minutes, so
+	// refresh every 25.
+	t := time.NewTicker(25 * time.Minute)
 	defer t.Stop()
 
 	for {
@@ -163,14 +159,24 @@ func loopRefresh(ctx context.Context, c mqtt.Client) {
 			return
 
 		case <-t.C:
-			if err := refresh(c); err != nil {
+			if err := refresh(c, handler); err != nil {
 				log.Printf("Unable to refresh subscription: %v", err)
 			}
 		}
 	}
 }
 
-func refresh(c mqtt.Client) error {
+func refresh(c mqtt.Client, handler mqtt.MessageHandler) error {
+	if x := os.Getenv("HC_DEBUG"); x != "" {
+		fmt.Println("Renewing subscription to all topics")
+	}
+
+	token := c.Subscribe("#", 0, handler)
+	token.Wait()
+	if err := token.Error(); err != nil {
+		log.Fatalf("unable to subscribe to MQTT messages: %v", err)
+	}
+
 	payload := fmt.Sprintf(`{"request_id":"%x"}`, time.Now().UnixNano())
 	token1 := c.Publish("_zigbee_metering/request/is_app_open", 0, false, []byte(payload))
 	token2 := c.Publish("remote/request/is_app_open", 0, false, []byte(payload))
