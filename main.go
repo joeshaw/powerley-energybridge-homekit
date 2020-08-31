@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -56,7 +57,11 @@ func main() {
 	}
 
 	c := mqtt.NewClient(opts)
-	if token := c.Connect(); token.Wait() && token.Error() != nil {
+	token := c.Connect()
+	if ok := token.WaitTimeout(10 * time.Second); !ok {
+		log.Fatalf("timed out connecting to %s", ip)
+	}
+	if err := token.Error(); err != nil {
 		log.Fatalf("unable to connect to %s: %v", ip, token.Error())
 	}
 
@@ -172,21 +177,26 @@ func refresh(c mqtt.Client, handler mqtt.MessageHandler) error {
 	}
 
 	token := c.Subscribe("#", 0, handler)
-	token.Wait()
+	if ok := token.WaitTimeout(10 * time.Second); !ok {
+		return errors.New("timed out subscribing to MQTT messages")
+	}
 	if err := token.Error(); err != nil {
-		log.Fatalf("unable to subscribe to MQTT messages: %v", err)
+		return fmt.Errorf("unable to subscribe to MQTT messages: %w", err)
 	}
 
 	payload := fmt.Sprintf(`{"request_id":"%x"}`, time.Now().UnixNano())
 	token1 := c.Publish("_zigbee_metering/request/is_app_open", 0, false, []byte(payload))
 	token2 := c.Publish("remote/request/is_app_open", 0, false, []byte(payload))
-	token1.Wait()
-	token2.Wait()
-
+	if ok := token1.WaitTimeout(10 * time.Second); !ok {
+		return errors.New("timed out publishing to _zigbee_metering/request/is_app_open")
+	}
 	if err := token1.Error(); err != nil {
 		return err
 	}
 
+	if ok := token2.WaitTimeout(10 * time.Second); !ok {
+		return errors.New("timed out publishing to remote/request/is_app_open")
+	}
 	return token2.Error()
 }
 
