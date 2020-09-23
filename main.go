@@ -55,6 +55,12 @@ func main() {
 		opts.SetUsername("admin")
 		opts.SetPassword("trinity")
 	}
+	opts.SetOnConnectHandler(func(c mqtt.Client) {
+		log.Println("MQTT connection established")
+	})
+	opts.SetConnectionLostHandler(func(c mqtt.Client, err error) {
+		log.Printf("MQTT connection lost: %v", err)
+	})
 
 	c := mqtt.NewClient(opts)
 	token := c.Connect()
@@ -154,7 +160,7 @@ func loopRefresh(ctx context.Context, c mqtt.Client, handler mqtt.MessageHandler
 	}
 
 	// Instantaneous readings expire after 30 minutes, so
-	// refresh every 25.
+	// refresh after 25.
 	t := time.NewTicker(25 * time.Minute)
 	defer t.Stop()
 
@@ -166,6 +172,9 @@ func loopRefresh(ctx context.Context, c mqtt.Client, handler mqtt.MessageHandler
 		case <-t.C:
 			if err := refresh(c, handler); err != nil {
 				log.Printf("Unable to refresh subscription: %v", err)
+				t.Reset(1 * time.Minute)
+			} else {
+				t.Reset(25 * time.Minute)
 			}
 		}
 	}
@@ -174,6 +183,16 @@ func loopRefresh(ctx context.Context, c mqtt.Client, handler mqtt.MessageHandler
 func refresh(c mqtt.Client, handler mqtt.MessageHandler) error {
 	if x := os.Getenv("HC_DEBUG"); x != "" {
 		fmt.Println("Renewing subscription to all topics")
+	}
+
+	if !c.IsConnectionOpen() {
+		token := c.Connect()
+		if ok := token.WaitTimeout(10 * time.Second); !ok {
+			return errors.New("timed out reconnecting to MQTT")
+		}
+		if err := token.Error(); err != nil {
+			return fmt.Errorf("unable to re-connect to MQTT: %w", token.Error())
+		}
 	}
 
 	token := c.Subscribe("#", 0, handler)
