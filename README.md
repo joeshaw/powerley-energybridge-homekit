@@ -1,5 +1,5 @@
 
-# powerley-energybridge-homecontrol
+# powerley-energybridge-homekit
 
 HomeKit support and Prometheus exporter for Powerley Energy Bridge
 devices.
@@ -23,11 +23,11 @@ the current demand in watts under the metric
 
 The tool can be installed with:
 
-    go get -u github.com/joeshaw/powerley-energybridge-homecontrol
+    go get -u github.com/joeshaw/powerley-energybridge-homekit
 
 Then you can run the service:
 
-    powerley-energybridge-homecontrol -ip <energybridge ip>
+    powerley-energybridge-homekit -ip <energybridge ip>
 
 The service will receive messages from the energy bridge every 5
 seconds.
@@ -49,7 +49,7 @@ sure the code has been run through `gofmt`.
 
 Copyright 2018-2019 Joe Shaw
 
-`powerley-energybridge-homecontrol` is licensed under the MIT License.
+`powerley-energybridge-homekit` is licensed under the MIT License.
 See the LICENSE file for details.
 
 

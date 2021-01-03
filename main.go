@@ -50,7 +50,7 @@ func main() {
 
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker("tcp://" + ip + ":2883")
-	opts.SetClientID("powerley-energybridge-homecontrol")
+	opts.SetClientID("powerley-energybridge-homekit")
 	if auth {
 		opts.SetUsername("admin")
 		opts.SetPassword("trinity")

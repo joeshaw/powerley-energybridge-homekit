@@ -1,4 +1,4 @@
-module github.com/joeshaw/powerley-energybridge-homecontrol
+module github.com/joeshaw/powerley-energybridge-homekit
 
 go 1.12
 
